@@ -1,45 +1,61 @@
 # envguard
 
-Validate environment variables at startup — fail fast with a clear error
-instead of crashing 30 minutes later in production with
-`Cannot read DATABASE_URL of undefined`.
-
-Framework-agnostic. No rewriting `process.env` access. No proxy object.
-Define a schema, call one function at startup, done.
+Type-safe environment variable validation. Framework-agnostic.
+Zero rewrite of process.env. Fails fast at startup with a clear error.
 
 ## Install
 
 ```bash
 npm install envguard zod
-# or
-pnpm add envguard zod
 ```
 
-`zod` is a peer dependency — envguard uses whatever version you already
-have installed.
-
-## Usage
+## The problem
 
 ```typescript
-import { createEnv } from 'envguard'
-import { z } from 'zod'
-
-export const env = createEnv({
-  schema: {
-    DATABASE_URL: z.string().url(),
-    PORT: z.coerce.number().default(3000),
-    NODE_ENV: z.enum(['development', 'production', 'test']),
-    DEBUG: z.coerce.boolean().optional(),
-  },
-})
-
-// env.PORT is a number, env.NODE_ENV is the literal union — fully typed.
+const dbUrl = process.env.DATABASE_URL
+// dbUrl is string | undefined
+// Your app deploys clean
+// 30 minutes later: "Cannot read properties of undefined"
+// because someone forgot to set DATABASE_URL in production
 ```
 
-Call this once, at process startup, before anything else reads `process.env`.
-If a required variable is missing or malformed, envguard prints exactly
-which variable and why, then throws (or exits, see below) — your app never
-boots into a half-configured state.
+## The fix
+
+```typescript
+// envguard.config.ts
+import { z } from 'zod'
+import { defineEnvConfig } from 'envguard'
+
+export default defineEnvConfig({
+  DATABASE_URL: z.string().url(),
+  PORT:         z.coerce.number().default(3000),
+  NODE_ENV:     z.enum(['development', 'production', 'test']),
+  STRIPE_KEY:   z.string().startsWith('sk_'),
+  REDIS_URL:    z.string().url().optional(),
+})
+```
+
+```typescript
+// At the top of your app entry point (index.ts, server.ts, etc.)
+import { createEnv } from 'envguard'
+import schema from './envguard.config'
+
+export const env = createEnv({ schema })
+// env.DATABASE_URL is string — not string | undefined
+// env.PORT is number — coerced from the string env var
+// App throws immediately at startup if anything is invalid
+```
+
+```typescript
+// Use it anywhere — fully typed
+import { env } from './env'
+
+await db.connect(env.DATABASE_URL)
+app.listen(env.PORT)
+```
+
+If anything is missing or invalid, you get this instead of a vague
+crash three layers deep in your app:
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -48,99 +64,77 @@ boots into a half-configured state.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   ✗ DATABASE_URL
-    Required
+    Invalid url
     received: (not set)
 
-  ✗ PORT
-    Expected number, received nan
-    received: "abc"
+  ✗ STRIPE_KEY
+    Invalid input
+    received: "pk_test_abc123"
 
   Fix: set these variables in your .env file or your
   deployment environment, then restart the process.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-## API
-
-### `createEnv(options)`
-
-| Option           | Type                                      | Default        | Description                                                              |
-| ---------------- | ------------------------------------------ | -------------- | -------------------------------------------------------------------------- |
-| `schema`          | `Record<string, z.ZodTypeAny>`             | —              | Required. Maps env var names to Zod schemas.                              |
-| `source`          | `NodeJS.ProcessEnv \| Record<string, ...>` | `process.env`  | Where to read raw values from — override for testing.                     |
-| `onError`         | `'throw' \| 'exit'`                        | `'throw'`       | `'exit'` logs the report and calls `process.exit(1)` instead of throwing. |
-| `skipValidation`  | `boolean`                                  | `false`         | Bypasses validation entirely — useful in tests with stubbed env values.   |
-
-Returns an object typed via `z.infer` for every key in `schema`.
-
-### `generateEnvExample(schema)`
-
-Generates `.env.example` file contents from a schema, with sensible
-placeholders per type (`https://example.com` for `.url()`,
-`user@example.com` for `.email()`, the first value for `z.enum()`, etc.)
-and a `# Optional` comment above optional fields.
-
-```typescript
-import { generateEnvExample } from 'envguard'
-import { writeFileSync } from 'fs'
-
-writeFileSync('.env.example', generateEnvExample({
-  DATABASE_URL: z.string().url(),
-  PORT: z.coerce.number(),
-}))
-```
-
-### `EnvValidationError`
-
-Thrown when validation fails (unless `onError: 'exit'`). Carries a
-`fieldErrors: EnvFieldError[]` array — one entry per failing variable,
-with `key`, `message`, and `received`.
-
-## CLI — catch bad env vars in CI, before deploy
-
-`createEnv()` validates at app startup, which is good but happens *after*
-deploy. The CLI validates the same schema in CI, before deploy even starts —
-so a bad config fails the build instead of crash-looping in production.
-
-Create `envguard.config.ts` at your project root:
-
-```typescript
-import { z } from 'zod'
-import { defineEnvConfig } from 'envguard'
-
-export default defineEnvConfig({
-  DATABASE_URL: z.string().url(),
-  PORT: z.coerce.number().default(3000),
-  NODE_ENV: z.enum(['development', 'production', 'test']),
-  STRIPE_KEY: z.string().startsWith('sk_'),
-  REDIS_URL: z.string().url().optional(),
-})
-```
-
-`defineEnvConfig()` is an identity function — it exists purely so your
-editor infers and autocompletes against the Zod schema types.
+## CLI — validate in CI before you deploy
 
 ```bash
 npx envguard check
-# Loads envguard.config.ts, validates against process.env (plus .env if
-# present), prints the report, exits 0 or 1.
-
-npx envguard check --env-file .env.production
-# Validate against a specific env file instead of process.env.
-
-npx envguard check --ci
-# Same as check, but prints machine-readable JSON for CI logs instead of
-# the human-readable report:
-#   {"status":"ok","errors":[]}
-#   {"status":"failed","errors":[{"key":"...","message":"...","received":"..."}]}
-
-npx envguard example
-# Generates .env.example from envguard.config.ts and writes it to disk.
 ```
 
-Wire `envguard check --ci` into your CI pipeline before the deploy step —
-a missing or malformed env var fails the build instead of reaching
-production.
+Catches missing env vars in your CI pipeline, before a deploy ever
+starts. No more discovering a missing var after the app is already
+crash-looping in production.
+
+```bash
+npx envguard check --env-file .env.production
+npx envguard check --ci          # JSON output for CI logs
+npx envguard example             # generate .env.example from schema
+```
+
+## Using it in CI (GitHub Actions)
+
+No custom action needed — call the CLI directly, before your deploy step:
+
+```yaml
+- name: Validate environment
+  run: npx envguard check --ci
+  env:
+    DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    STRIPE_KEY: ${{ secrets.STRIPE_KEY }}
+```
+
+If any required env var is missing from your deployment secrets, the
+workflow fails here instead of mid-deploy.
+
+## API
+
+### createEnv(options)
+
+```typescript
+createEnv({
+  schema:         EnvSchema      // your zod schema record
+  source?:        ProcessEnv     // defaults to process.env
+  onError?:       'throw' | 'exit'  // defaults to 'throw'
+  skipValidation?: boolean       // defaults to false, for test environments
+})
+```
+
+### defineEnvConfig(schema)
+
+Identity function for type inference in your config file. No runtime effect.
+
+### generateEnvExample(schema)
+
+Returns a string suitable for writing to .env.example.
+
+## Why not t3-env?
+
+t3-env is excellent for Next.js specifically but requires you to access
+all env vars through their generated object, replacing every
+`process.env.X` in your codebase. envguard validates the same way but
+you keep using `process.env` directly everywhere else in your app —
+envguard only owns the startup check, not your entire codebase's env access pattern.
 
 ## License
 
