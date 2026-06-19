@@ -54,3 +54,9 @@ export function createEnv<TSchema extends EnvSchema>(
 
   return result as InferEnv<TSchema>
 }
+
+// Identity function — exists purely for type inference and IDE autocomplete
+// when defining a schema in envguard.config.ts.
+export function defineEnvConfig<TSchema extends EnvSchema>(schema: TSchema): TSchema {
+  return schema
+}

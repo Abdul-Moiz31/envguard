@@ -96,6 +96,52 @@ Thrown when validation fails (unless `onError: 'exit'`). Carries a
 `fieldErrors: EnvFieldError[]` array — one entry per failing variable,
 with `key`, `message`, and `received`.
 
+## CLI — catch bad env vars in CI, before deploy
+
+`createEnv()` validates at app startup, which is good but happens *after*
+deploy. The CLI validates the same schema in CI, before deploy even starts —
+so a bad config fails the build instead of crash-looping in production.
+
+Create `envguard.config.ts` at your project root:
+
+```typescript
+import { z } from 'zod'
+import { defineEnvConfig } from 'envguard'
+
+export default defineEnvConfig({
+  DATABASE_URL: z.string().url(),
+  PORT: z.coerce.number().default(3000),
+  NODE_ENV: z.enum(['development', 'production', 'test']),
+  STRIPE_KEY: z.string().startsWith('sk_'),
+  REDIS_URL: z.string().url().optional(),
+})
+```
+
+`defineEnvConfig()` is an identity function — it exists purely so your
+editor infers and autocompletes against the Zod schema types.
+
+```bash
+npx envguard check
+# Loads envguard.config.ts, validates against process.env (plus .env if
+# present), prints the report, exits 0 or 1.
+
+npx envguard check --env-file .env.production
+# Validate against a specific env file instead of process.env.
+
+npx envguard check --ci
+# Same as check, but prints machine-readable JSON for CI logs instead of
+# the human-readable report:
+#   {"status":"ok","errors":[]}
+#   {"status":"failed","errors":[{"key":"...","message":"...","received":"..."}]}
+
+npx envguard example
+# Generates .env.example from envguard.config.ts and writes it to disk.
+```
+
+Wire `envguard check --ci` into your CI pipeline before the deploy step —
+a missing or malformed env var fails the build instead of reaching
+production.
+
 ## License
 
 MIT

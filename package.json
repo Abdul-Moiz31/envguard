@@ -17,6 +17,9 @@
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "envguard": "./dist/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -24,7 +27,10 @@
       "require": "./dist/index.js"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "peerDependencies": {
     "zod": ">=3"
   },
@@ -41,5 +47,10 @@
     "typescript": "^5.4.0",
     "vitest": "^1.6.0",
     "zod": "^3.22.0"
+  },
+  "dependencies": {
+    "commander": "^15.0.0",
+    "dotenv": "^17.4.2",
+    "tsx": "^4.22.4"
   }
 }
